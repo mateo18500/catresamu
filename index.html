@@ -3,57 +3,155 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gestionnaire — SAMU Cher v2.8 (Firebase)</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <title>Affichage — SAMU Cher v2.7</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
   <style>
-    body,html{margin:0;height:100%;font-family:Arial,Helvetica,sans-serif;background:#08101e;color:#e7eefc}
-    #app{display:grid;grid-template-columns:320px 1fr;height:100%}
-    #sidebar{background:#0f1c36;padding:10px;overflow-y:auto}
-    h2{font-size:1rem;margin:10px 0;color:#3aa1ff}
-    .group{margin-bottom:1rem;padding:6px;border:1px solid #27406f;border-radius:8px}
-    .commune{cursor:pointer;margin:2px 0;padding:2px 4px;border-radius:4px}
-    .commune:hover{background:#152446}
-    #map{height:100%}
-    button{margin:4px 2px;padding:4px 8px;border:none;border-radius:4px;cursor:pointer}
-    .btn-service{background:#132240;color:#fff}
-    .btn-service.active{background:#3aa1ff;color:#001733}
+    :root{--bg:#08101e;--text:#e7eefc;--acc:#3aa1ff}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI}
+    #app{display:grid;grid-template-rows:auto 1fr;height:100%}
+
+    .topbar{position:relative;z-index:2000;display:flex;gap:.4rem;align-items:center;padding:.55rem .8rem;background:rgba(12,18,34,.9);border-bottom:1px solid #1b2947;flex-wrap:wrap}
+    .chip{border:1px solid #27406f;background:#132240;color:#d8e6ff;padding:.35rem .8rem;border-radius:999px;font-size:.9rem;cursor:pointer;display:inline-flex;gap:.45rem;align-items:center}
+    .chip.active{background:var(--acc);color:#001733;border-color:var(--acc)}
+    .title{font-weight:700;margin-right:.4rem}
+    .spacer{flex:1}
+    #map{height:100%;width:100%}
+
+    .legend{position:absolute;bottom:14px;left:14px;background:#0e1a31;border:1px solid #27406f;border-radius:12px;padding:.55rem .8rem;color:#cfe3ff;z-index:100}
+
+    .search{position:relative;display:flex;align-items:center;gap:.4rem;border:1px solid #27406f;background:#0f1c36;border-radius:999px;padding:.2rem .6rem}
+    .search input{background:transparent;border:none;outline:none;color:#e7eefc;min-width:240px}
+
+    .suggest{
+      position:absolute;top:40px;left:0;right:0;
+      background:#0e1a31;color:#e7eefc;border:1px solid #27406f;border-radius:10px;
+      max-height:260px;overflow:auto;z-index:3000;display:none;
+      box-shadow:0 8px 20px rgba(0,0,0,.35)
+    }
+    .suggest div{padding:.45rem .6rem;cursor:pointer}
+    .suggest div:hover{background:#152446}
   </style>
 </head>
 <body>
 <div id="app">
-  <div id="sidebar">
-    <h2>Gestion des Secteurs</h2>
-    <div id="tabs">
-      <button class="btn-service" data-svc="Ambulance">Ambulance</button>
-      <button class="btn-service" data-svc="SMUR">SMUR</button>
-      <button class="btn-service" data-svc="Médecin mobile">Médecin mobile</button>
+  <div class="topbar">
+    <div class="title">Affichage — SAMU Cher v2.7</div>
+    <button id="btnAmb" class="chip">Ambulance</button>
+    <button id="btnSmur" class="chip">SMUR</button>
+    <button id="btnMob" class="chip">Médecin mobile</button>
+    <div class="spacer"></div>
+    <div class="search">
+      <span>🔎</span>
+      <input id="q" placeholder="Rechercher une commune (accents ignorés)…" />
+      <div id="suggest" class="suggest"></div>
     </div>
-    <div id="groups"></div>
-
-    <h2>Points d’intérêt</h2>
-    <select id="poiType">
-      <option value="hopital">Hôpital 🏥</option>
-      <option value="clinique">Clinique 🏨</option>
-      <option value="helipad">Hélipad 🚁</option>
-      <option value="poui">POUI 📍</option>
-    </select>
-    <input id="poiName" placeholder="Nom du POI"/>
-    <p>Clique sur la carte pour placer un POI.</p>
-    <div id="poiList"></div>
+    <button id="toggleHop" class="chip">Hôpitaux</button>
+    <button id="toggleCli" class="chip">Cliniques</button>
+    <button id="toggleHel" class="chip">Hélipads</button>
+    <button id="togglePou" class="chip">POUI</button>
   </div>
-  <div id="map"></div>
+
+  <div style="position:relative">
+    <div id="map"></div>
+    <div class="legend">Limite Cher <span style="display:inline-block;width:12px;height:12px;background:#ff5a5f;border-radius:50%;margin-left:.35rem"></span></div>
+  </div>
 </div>
 
-<!-- Firebase -->
+<script>
+// ===== Clés locales (uniquement pour contour & communes)
+const KEY = { communes:'samuCherCommunes', cher:'samuCherBoundary' };
+const load=(k,f)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? f }catch{ return f } };
+
+// ===== Carte
+const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([47.08,2.40],9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+
+const baseStyle={ color:'#36558f', weight:1, fillColor:'#1d2b4b', fillOpacity:.35 };
+
+const cherData=load(KEY.cher,null);
+if(cherData) L.geoJSON(cherData,{style:{color:'#ff5a5f',weight:3,fill:false,dashArray:'6,8'}}).addTo(map);
+
+const communes=load(KEY.communes,{type:'FeatureCollection',features:[]});
+const communesLayer=L.geoJSON(communes,{style:baseStyle,onEachFeature:(f,ly)=>ly.bindTooltip(f.properties.nom)}).addTo(map);
+try{ map.fitBounds(communesLayer.getBounds().pad(0.2)); }catch{}
+
+// ===== POI (icônes)
+const poiLayers={ hopital:L.layerGroup().addTo(map), clinique:L.layerGroup().addTo(map), helipad:L.layerGroup().addTo(map), poui:L.layerGroup().addTo(map) };
+const icons={
+  hopital: L.icon({iconUrl:'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTA3NI9TEwWYyzyFhYfCxCoiC1KSJS_Zef6Ww&s',iconRetinaUrl:'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTA3NI9TEwWYyzyFhYfCxCoiC1KSJS_Zef6Ww&s',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-12]}),
+  clinique: L.icon({iconUrl:'icons/clinique.png',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-12]}),
+  helipad: L.icon({iconUrl:'https://e7.pngegg.com/pngimages/490/528/png-clipart-military-helicopter-landing-zone-helipad-signboard-miscellaneous-text-thumbnail.png',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-12]}),
+  poui: L.icon({iconUrl:'https://pixabay.com/gifs/get/g198a0d6d23cb2d1b3ff6b78d00732fdacf196593d459d828e71d71f2acf91e7626de0de0a0a20fb4b8f9464c224a7513454ad0faf8c058ccd51b384bd0ae52743333ad4cc659650f763582e7a9069428_128.gif',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-12]})
+};
+function iconFor(type){ return icons[type] || L.icon({iconUrl:'icons/default.png',iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-12]}); }
+
+// Tableau global alimenté par Firebase :
+let pois = [];
+function renderPOI(){
+  Object.values(poiLayers).forEach(l=>l.clearLayers());
+  (pois||[]).forEach(p=> L.marker([p.lat,p.lng],{icon:iconFor(p.type)}).bindPopup(`<b>${p.name}</b><br>${p.type}`).addTo(poiLayers[p.type]));
+}
+
+// ===== Services & groupes
+let services={
+  'Ambulance':{groups:{'Nord':[],'Est':[],'St Amand':[],'Bourges':[],'Vierzon':[]},colors:{'Nord':'#22c55e','Est':'#3b82f6','St Amand':'#f59e0b','Bourges':'#ef4444','Vierzon':'#a855f7'}},
+  'SMUR':{groups:{'Bourges':[],'Vierzon':[],'St Amand':[],'Cosne':[],'Nevers':[],'Gien':[]},colors:{'Bourges':'#ef4444','Vierzon':'#f59e0b','St Amand':'#22c55e','Cosne':'#3b82f6','Nevers':'#a855f7','Gien':'#14b8a6'}},
+  'Médecin mobile':{groups:{'Nord':[],'Sud':[]},colors:{'Nord':'#22c55e','Sud':'#ef4444'}}
+};
+
+const svcLayers={Ambulance:L.layerGroup(),SMUR:L.layerGroup(),"Médecin mobile":L.layerGroup()};
+function renderService(svc){
+  svcLayers[svc].clearLayers();
+  const gj=communes; // déjà chargé
+  Object.entries(services[svc].groups).forEach(([g,codes])=>{
+    if(!codes?.length) return;
+    const feats=gj.features.filter(f=>codes.includes(f.properties.code));
+    if(!feats.length) return;
+    let u=feats[0]; for(let i=1;i<feats.length;i++) u=turf.union(u,feats[i]);
+    const col=services[svc].colors[g]||'#3aa1ff';
+    L.geoJSON(u,{style:{color:col,weight:2,fillColor:col,fillOpacity:.22}}).bindTooltip(`${svc} — ${g}`).addTo(svcLayers[svc]);
+  });
+}
+function toggleService(svc,btn){
+  const on=map.hasLayer(svcLayers[svc]);
+  if(on){ map.removeLayer(svcLayers[svc]); btn.classList.remove('active'); }
+  else { renderService(svc); svcLayers[svc].addTo(map); btn.classList.add('active'); }
+}
+document.getElementById('btnAmb').onclick=()=> toggleService('Ambulance',document.getElementById('btnAmb'));
+document.getElementById('btnSmur').onclick=()=> toggleService('SMUR',document.getElementById('btnSmur'));
+document.getElementById('btnMob').onclick=()=> toggleService('Médecin mobile',document.getElementById('btnMob'));
+
+// POI toggles
+function toggle(layer){ if(map.hasLayer(layer)) map.removeLayer(layer); else layer.addTo(map); }
+document.getElementById('toggleHop').onclick=()=>toggle(poiLayers.hopital);
+document.getElementById('toggleCli').onclick=()=>toggle(poiLayers.clinique);
+document.getElementById('toggleHel').onclick=()=>toggle(poiLayers.helipad);
+document.getElementById('togglePou').onclick=()=>toggle(poiLayers.poui);
+
+// ===== Recherche avec suggestions
+const input=document.getElementById('q');
+const suggestBox=document.getElementById('suggest');
+const normalize=(s)=>{try{return (s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();}catch{return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}};
+function buildIndexFromMap(){ const arr=[]; communesLayer.eachLayer(ly=>{const f=ly.feature; arr.push({code:f.properties.code,nom:f.properties.nom,nom_norm:normalize(f.properties.nom||''),layer:ly});}); return arr;}
+let featsIndex=[]; setTimeout(()=>{featsIndex=buildIndexFromMap();},0);
+function showSuggest(items){ if(!items.length){suggestBox.style.display='none';suggestBox.innerHTML='';return;} suggestBox.innerHTML=''; items.slice(0,40).forEach(it=>{ const d=document.createElement('div'); d.textContent=`${it.nom} (${it.code})`; d.onclick=()=> zoomTo(it.layer); suggestBox.appendChild(d); }); suggestBox.style.display='block'; }
+function zoomTo(layer){ suggestBox.style.display='none'; if(!layer) return; map.fitBounds(layer.getBounds().pad(0.5)); const old={color:layer.options.color,weight:layer.options.weight,fillColor:layer.options.fillColor,fillOpacity:layer.options.fillOpacity}; const flash={color:'#ffffff',weight:4,fillColor:'#ffffff88',fillOpacity:.6}; layer.setStyle(flash); setTimeout(()=>layer.setStyle(old),600); setTimeout(()=>layer.setStyle(flash),1100); setTimeout(()=>layer.setStyle(old),1700); }
+input.addEventListener('input',()=>{ const q=normalize(input.value||''); if(!q){ showSuggest([]); return; } const res=featsIndex.filter(f=> f.nom_norm.includes(q) || (f.code||'').includes(q) ); showSuggest(res); });
+input.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ const q=normalize(input.value||''); const res=featsIndex.filter(f=> f.nom_norm.includes(q) || (f.code||'').includes(q) ); if(res[0]) zoomTo(res[0].layer); }});
+document.addEventListener('click',(e)=>{ if(!suggestBox.contains(e.target) && e.target!==input){ suggestBox.style.display='none'; }});
+</script>
+
+<!-- ===== CONNECTEUR FIREBASE (LECTURE TEMPS RÉEL) ===== -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
-  import { getDatabase, ref, set, update, remove, onValue, push } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
+  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyA-qJXZInw_RGfHL86JSe94Q3sjcoybpVI",
     authDomain: "samu-cher-map.firebaseapp.com",
-    databaseURL: "https://samu-cher-map-default-rtdb.europe-west1.firebasedatabase.app", // ⚠️ vérifie bien l’URL
+    databaseURL: "https://samu-cher-map-default-rtdb.europe-west1.firebasedatabase.app",
     projectId: "samu-cher-map",
     storageBucket: "samu-cher-map.firebasestorage.app",
     messagingSenderId: "992546090147",
@@ -61,100 +159,27 @@
   };
 
   const app = initializeApp(firebaseConfig);
-  const db = getDatabase(app);
+  const db  = getDatabase(app);
 
-  // === Leaflet ===
-  const map = L.map("map").setView([47.08,2.4],9);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19}).addTo(map);
-
-  let communesFC={type:"FeatureCollection",features:[]};
-  let services={};
-  let currentService="Ambulance";
-
-  const colors={
-    Ambulance:{Nord:"#22c55e",Est:"#3b82f6","St Amand":"#f59e0b",Bourges:"#ef4444",Vierzon:"#a855f7"},
-    SMUR:{Bourges:"#ef4444",Vierzon:"#f59e0b","St Amand":"#22c55e",Cosne:"#3b82f6",Nevers:"#a855f7",Gien:"#14b8a6"},
-    "Médecin mobile":{Nord:"#22c55e",Sud:"#ef4444"}
-  };
-
-  // === Firebase listeners ===
-  onValue(ref(db,"communes"), snap=>{
-    if(!snap.exists()) return;
-    communesFC=snap.val();
-    renderSidebar();
-  });
-  onValue(ref(db,"services"), snap=>{
-    if(snap.exists()) services=snap.val(); else services={};
-    renderSidebar();
-  });
-  onValue(ref(db,"pois"), snap=>{
-    renderPOIList(snap.exists()?snap.val():{});
+  // POI en temps réel
+  onValue(ref(db, "pois"), (snap) => {
+    if (!snap.exists()) { pois = []; renderPOI(); return; }
+    const v = snap.val();
+    pois = Array.isArray(v) ? v : Object.values(v);
+    renderPOI();
   });
 
-  // === UI Services ===
-  document.querySelectorAll(".btn-service").forEach(btn=>{
-    btn.onclick=()=>{
-      document.querySelectorAll(".btn-service").forEach(b=>b.classList.remove("active"));
-      btn.classList.add("active");
-      currentService=btn.dataset.svc;
-      renderSidebar();
-    };
-  });
+  // Services en temps réel
+  onValue(ref(db, "services"), (snap) => {
+    if (!snap.exists()) return;
+    services = snap.val(); // remplace l'objet global
 
-  function renderSidebar(){
-    const box=document.getElementById("groups");
-    box.innerHTML="";
-    if(!communesFC.features.length) return;
-    const def=services[currentService]||{groups:{},colors:colors[currentService]};
-    Object.keys(colors[currentService]).forEach(g=>{
-      if(!def.groups[g]) def.groups[g]=[];
-      const div=document.createElement("div");
-      div.className="group";
-      div.innerHTML=`<b style=\"color:${colors[currentService][g]}\">${g}</b>`;
-      communesFC.features.forEach(f=>{
-        const code=f.properties.code, nom=f.properties.nom;
-        const checked=def.groups[g].includes(code);
-        const span=document.createElement("div");
-        span.className="commune";
-        span.style.opacity=checked?1:0.5;
-        span.textContent=nom;
-        span.onclick=()=>{
-          if(checked){ def.groups[g]=def.groups[g].filter(c=>c!==code); }
-          else{ def.groups[g].push(code); }
-          update(ref(db,`services/${currentService}`),{groups:def.groups,colors:def.colors||colors[currentService]});
-        };
-        div.appendChild(span);
-      });
-      box.appendChild(div);
+    // Si un service est actuellement affiché, on le réactualise
+    ["Ambulance","SMUR","Médecin mobile"].forEach(s=>{
+      if (map.hasLayer(svcLayers[s])) { renderService(s); }
     });
-  }
-
-  // === POI gestion ===
-  function renderPOIList(pois){
-    const list=document.getElementById("poiList");
-    list.innerHTML="";
-    Object.entries(pois).forEach(([id,p])=>{
-      const div=document.createElement("div");
-      div.textContent=`${p.name} (${p.type})`;
-      const btn=document.createElement("button");
-      btn.textContent="❌";
-      btn.onclick=()=> remove(ref(db,`pois/${id}`));
-      div.appendChild(btn);
-      list.appendChild(div);
-    });
-  }
-
-  let pendingPOI=null;
-  document.getElementById("poiName").addEventListener("change",()=>{pendingPOI=null;});
-  map.on("click",e=>{
-    const type=document.getElementById("poiType").value;
-    const name=document.getElementById("poiName").value;
-    if(!name) return;
-    const p={name,type,lat:e.latlng.lat,lng:e.latlng.lng};
-    push(ref(db,"pois"),p);
-    document.getElementById("poiName").value=\"\";
   });
-
 </script>
+
 </body>
 </html>
