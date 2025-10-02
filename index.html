@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gestionnaire — SAMU Cher v2.8 (Firebase)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body,html{margin:0;height:100%;font-family:Arial,Helvetica,sans-serif;background:#08101e;color:#e7eefc}
+    #app{display:grid;grid-template-columns:320px 1fr;height:100%}
+    #sidebar{background:#0f1c36;padding:10px;overflow-y:auto}
+    h2{font-size:1rem;margin:10px 0;color:#3aa1ff}
+    .group{margin-bottom:1rem;padding:6px;border:1px solid #27406f;border-radius:8px}
+    .commune{cursor:pointer;margin:2px 0;padding:2px 4px;border-radius:4px}
+    .commune:hover{background:#152446}
+    #map{height:100%}
+    button{margin:4px 2px;padding:4px 8px;border:none;border-radius:4px;cursor:pointer}
+    .btn-service{background:#132240;color:#fff}
+    .btn-service.active{background:#3aa1ff;color:#001733}
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <h2>Gestion des Secteurs</h2>
+    <div id="tabs">
+      <button class="btn-service" data-svc="Ambulance">Ambulance</button>
+      <button class="btn-service" data-svc="SMUR">SMUR</button>
+      <button class="btn-service" data-svc="Médecin mobile">Médecin mobile</button>
+    </div>
+    <div id="groups"></div>
+
+    <h2>Points d’intérêt</h2>
+    <select id="poiType">
+      <option value="hopital">Hôpital 🏥</option>
+      <option value="clinique">Clinique 🏨</option>
+      <option value="helipad">Hélipad 🚁</option>
+      <option value="poui">POUI 📍</option>
+    </select>
+    <input id="poiName" placeholder="Nom du POI"/>
+    <p>Clique sur la carte pour placer un POI.</p>
+    <div id="poiList"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
+  import { getDatabase, ref, set, update, remove, onValue, push } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyA-qJXZInw_RGfHL86JSe94Q3sjcoybpVI",
+    authDomain: "samu-cher-map.firebaseapp.com",
+    databaseURL: "https://samu-cher-map-default-rtdb.europe-west1.firebasedatabase.app", // ⚠️ vérifie bien l’URL
+    projectId: "samu-cher-map",
+    storageBucket: "samu-cher-map.firebasestorage.app",
+    messagingSenderId: "992546090147",
+    appId: "1:992546090147:web:c84cc2e9459017b8ba2316"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  // === Leaflet ===
+  const map = L.map("map").setView([47.08,2.4],9);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19}).addTo(map);
+
+  let communesFC={type:"FeatureCollection",features:[]};
+  let services={};
+  let currentService="Ambulance";
+
+  const colors={
+    Ambulance:{Nord:"#22c55e",Est:"#3b82f6","St Amand":"#f59e0b",Bourges:"#ef4444",Vierzon:"#a855f7"},
+    SMUR:{Bourges:"#ef4444",Vierzon:"#f59e0b","St Amand":"#22c55e",Cosne:"#3b82f6",Nevers:"#a855f7",Gien:"#14b8a6"},
+    "Médecin mobile":{Nord:"#22c55e",Sud:"#ef4444"}
+  };
+
+  // === Firebase listeners ===
+  onValue(ref(db,"communes"), snap=>{
+    if(!snap.exists()) return;
+    communesFC=snap.val();
+    renderSidebar();
+  });
+  onValue(ref(db,"services"), snap=>{
+    if(snap.exists()) services=snap.val(); else services={};
+    renderSidebar();
+  });
+  onValue(ref(db,"pois"), snap=>{
+    renderPOIList(snap.exists()?snap.val():{});
+  });
+
+  // === UI Services ===
+  document.querySelectorAll(".btn-service").forEach(btn=>{
+    btn.onclick=()=>{
+      document.querySelectorAll(".btn-service").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      currentService=btn.dataset.svc;
+      renderSidebar();
+    };
+  });
+
+  function renderSidebar(){
+    const box=document.getElementById("groups");
+    box.innerHTML="";
+    if(!communesFC.features.length) return;
+    const def=services[currentService]||{groups:{},colors:colors[currentService]};
+    Object.keys(colors[currentService]).forEach(g=>{
+      if(!def.groups[g]) def.groups[g]=[];
+      const div=document.createElement("div");
+      div.className="group";
+      div.innerHTML=`<b style=\"color:${colors[currentService][g]}\">${g}</b>`;
+      communesFC.features.forEach(f=>{
+        const code=f.properties.code, nom=f.properties.nom;
+        const checked=def.groups[g].includes(code);
+        const span=document.createElement("div");
+        span.className="commune";
+        span.style.opacity=checked?1:0.5;
+        span.textContent=nom;
+        span.onclick=()=>{
+          if(checked){ def.groups[g]=def.groups[g].filter(c=>c!==code); }
+          else{ def.groups[g].push(code); }
+          update(ref(db,`services/${currentService}`),{groups:def.groups,colors:def.colors||colors[currentService]});
+        };
+        div.appendChild(span);
+      });
+      box.appendChild(div);
+    });
+  }
+
+  // === POI gestion ===
+  function renderPOIList(pois){
+    const list=document.getElementById("poiList");
+    list.innerHTML="";
+    Object.entries(pois).forEach(([id,p])=>{
+      const div=document.createElement("div");
+      div.textContent=`${p.name} (${p.type})`;
+      const btn=document.createElement("button");
+      btn.textContent="❌";
+      btn.onclick=()=> remove(ref(db,`pois/${id}`));
+      div.appendChild(btn);
+      list.appendChild(div);
+    });
+  }
+
+  let pendingPOI=null;
+  document.getElementById("poiName").addEventListener("change",()=>{pendingPOI=null;});
+  map.on("click",e=>{
+    const type=document.getElementById("poiType").value;
+    const name=document.getElementById("poiName").value;
+    if(!name) return;
+    const p={name,type,lat:e.latlng.lat,lng:e.latlng.lng};
+    push(ref(db,"pois"),p);
+    document.getElementById("poiName").value=\"\";
+  });
+
+</script>
+</body>
+</html>
