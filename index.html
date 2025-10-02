@@ -79,7 +79,7 @@ try{
   const b = communesLayer.getBounds().pad(0.2);
   map.fitBounds(b);
   // après le recadrage, on zoome légèrement (1 cran) :
-  map.once('moveend', () => map.setZoom(map.getZoom() + 6));
+  map.once('moveend', () => map.setZoom(map.getZoom() + 8));
 }catch{}
 
 // ===== POI (icônes)
