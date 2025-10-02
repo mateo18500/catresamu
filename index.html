@@ -75,7 +75,12 @@ if(cherData) L.geoJSON(cherData,{style:{color:'#ff5a5f',weight:3,fill:false,dash
 
 const communes=load(KEY.communes,{type:'FeatureCollection',features:[]});
 const communesLayer=L.geoJSON(communes,{style:baseStyle,onEachFeature:(f,ly)=>ly.bindTooltip(f.properties.nom)}).addTo(map);
-try{ map.fitBounds(communesLayer.getBounds().pad(0.2)); }catch{}
+try{
+  const b = communesLayer.getBounds().pad(0.2);
+  map.fitBounds(b);
+  // après le recadrage, on zoome légèrement (1 cran) :
+  map.once('moveend', () => map.setZoom(map.getZoom() + 1));
+}catch{}
 
 // ===== POI (icônes)
 const poiLayers={ hopital:L.layerGroup().addTo(map), clinique:L.layerGroup().addTo(map), helipad:L.layerGroup().addTo(map), poui:L.layerGroup().addTo(map) };
