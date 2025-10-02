@@ -65,7 +65,7 @@ const KEY = { communes:'samuCherCommunes', cher:'samuCherBoundary' };
 const load=(k,f)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? f }catch{ return f } };
 
 // ===== Carte
-const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([47.08,2.40],13);
+const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([47.08,2.40],11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:35,attribution:'© OpenStreetMap'}).addTo(map);
 
 const baseStyle={ color:'#36558f', weight:1, fillColor:'#1d2b4b', fillOpacity:.35 };
@@ -79,7 +79,7 @@ try{
   const b = communesLayer.getBounds().pad(0.2);
   map.fitBounds(b);
   // après le recadrage, on zoome légèrement (1 cran) :
-  map.once('moveend', () => map.setZoom(map.getZoom() + 4));
+  map.once('moveend', () => map.setZoom(map.getZoom() + 7));
 }catch{}
 
 // ===== POI (icônes)
